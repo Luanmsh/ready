@@ -1,2 +1,2 @@
 # ready
-ready redis
+ready redis!
