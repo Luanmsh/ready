@@ -5,6 +5,7 @@ import com.lms.ready.util.DateUtils;
 import org.springframework.stereotype.Component;
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPool;
+import redis.clients.jedis.ZParams;
 
 import javax.annotation.Resource;
 import java.util.*;
@@ -77,7 +78,7 @@ public class ArticleVote {
             articleMap.put("votes", "1");
             jedis.hmset(articleKey, articleMap);
             //根据评分排序
-            jedis.zadd("score", now + VoteConstants.VOTE_SCORE, articleKey);
+            jedis.zadd("score:", now + VoteConstants.VOTE_SCORE, articleKey);
             //根据发布时间排序
             jedis.zadd("time:", now, articleKey);
             return articleId;
@@ -96,7 +97,7 @@ public class ArticleVote {
         Jedis jedis = jedisPool.getResource();
         try {
             List<Map<String, String>> res = new ArrayList();
-            if (!"score:".equals(order) && !"time:".equals(order) || page == null || page < 1) {
+            if (page == null || page < 1) {
                 return res;
             }
             int start = (page - 1) * VoteConstants.ARTICLES_PER_PAGE;
@@ -111,6 +112,73 @@ public class ArticleVote {
                 res.add(articleMap);
             }
             return res;
+        } finally {
+            returnJedis(jedis);
+        }
+    }
+
+    /**
+     * 将文章添加到分组
+     * @param articleId
+     * @param groups
+     * @return
+     */
+    public boolean addToGroups(Long articleId, List<String> groups) {
+        Jedis jedis = jedisPool.getResource();
+        try {
+            if (groups == null || groups.size() == 0) {
+                return false;
+            }
+            String article = "article:" + articleId;
+            for (String group : groups) {
+                jedis.sadd("group:" + group, article);
+            }
+            return true;
+        } finally {
+            returnJedis(jedis);
+        }
+    }
+
+    /**
+     * 将文章从分组中删除
+     * @param articleId
+     * @param groups
+     * @return
+     */
+    public boolean removeFromGroups(Long articleId, List<String> groups) {
+        Jedis jedis = jedisPool.getResource();
+        try {
+            if (groups == null || groups.size() == 0) {
+                return false;
+            }
+            String article = "article:" + articleId;
+            for (String group : groups) {
+                jedis.srem("group:" + group, article);
+            }
+            return true;
+        } finally {
+            returnJedis(jedis);
+        }
+    }
+
+    /**
+     * 从分组中取出文章
+     * @param group
+     * @param page
+     * @param order
+     * @return
+     */
+    public List<Map<String, String>> getGroupArticles(String group, Integer page, String order) {
+        Jedis jedis = jedisPool.getResource();
+        try {
+            String orderGroup = order + group;
+            if (!jedis.exists(orderGroup)) {
+                ZParams zParams = new ZParams();
+                zParams.aggregate(ZParams.Aggregate.MAX);
+                jedis.zinterstore(orderGroup, zParams,  "group:" + group, order);
+            }
+            jedis.expire(orderGroup, 60);
+            return getArticles(page, orderGroup);
         } finally {
             returnJedis(jedis);
         }
